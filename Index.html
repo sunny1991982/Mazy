@@ -1,1 +1,142 @@
-# Mazy
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>HORROR MAZE ONLINE - ADMIN VERSION</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; touch-action: none; }
+        canvas { display: block; width: 100vw; height: 100vh; filter: brightness(0.7) contrast(1.2); }
+        
+        /* ปุ่มแอดมินลับขวาบน (05051991) */
+        #admin-btn { position: absolute; top: 0; right: 0; width: 30px; height: 30px; z-index: 1000; cursor: pointer; }
+        
+        #ui-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; }
+        #joy-base { position: absolute; bottom: 40px; left: 40px; width: 110px; height: 110px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; }
+        #joy-stick { position: absolute; top: 30px; left: 30px; width: 50px; height: 50px; background: rgba(255,255,255,0.4); border-radius: 50%; }
+        #look-zone { position: absolute; inset: 0 0 0 50%; pointer-events: auto; }
+        #status { position: absolute; top: 20px; width: 100%; text-align: center; color: #f00; font-size: 14px; text-shadow: 0 0 5px #000; }
+    </style>
+</head>
+<body>
+
+    <div id="admin-btn" onclick="openAdmin()"></div>
+    <div id="ui-layer">
+        <div id="status">กำลังเชื่อมต่อกับวิญญาณ...</div>
+        <div id="joy-base"><div id="joy-stick"></div></div>
+        <div id="look-zone"></div>
+    </div>
+
+    <canvas id="game"></canvas>
+
+<script>
+// เชื่อมต่อกับ Replit ของคุณโดยตรง
+const socket = io("https://socket-server-ตสสสสสส.replit.app"); 
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const map = [
+    [1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,2,1],
+    [1,0,1,1,0,1,1,1,0,1],
+    [1,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,1]
+];
+
+const player = { x: 1.5, y: 1.5, dir: 0, speed: 1, god: false };
+let others = {};
+
+socket.on('connect', () => { document.getElementById('status').innerText = "ออนไลน์แล้ว - ตามหากุญแจ!"; });
+socket.on('updatePlayers', (data) => { delete data[socket.id]; others = data; });
+
+// ระบบแอดมินโกงๆ (05051991)
+function openAdmin() {
+    let pw = prompt("รหัสผ่านแอดมิน:");
+    if(pw === "05051991") {
+        player.speed = 3;
+        player.god = true;
+        alert("โหมดแอดมิน: วิ่งเร็ว + อมตะ!");
+        document.getElementById('status').innerText = "ADMIN MODE ACTIVE";
+    }
+}
+
+// ควบคุมการเดิน
+let moveF = 0, moveS = 0;
+const stick = document.getElementById('joy-stick');
+const base = document.getElementById('joy-base');
+
+base.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const t = e.touches[0], r = base.getBoundingClientRect();
+    const dx = t.clientX - (r.left + 55), dy = t.clientY - (r.top + 55);
+    const d = Math.min(Math.sqrt(dx*dx+dy*dy), 40), a = Math.atan2(dy, dx);
+    stick.style.transform = `translate(${Math.cos(a)*d}px, ${Math.sin(a)*d}px)`;
+    moveF = -Math.sin(a)*(d/40); moveS = Math.cos(a)*(d/40);
+}, {passive: false});
+
+base.addEventListener('touchend', () => { stick.style.transform = 'none'; moveF = 0; moveS = 0; });
+
+let lastX = null;
+document.getElementById('look-zone').addEventListener('touchmove', e => {
+    if(lastX !== null) player.dir += (e.touches[0].clientX - lastX) * 0.008;
+    lastX = e.touches[0].clientX;
+});
+document.getElementById('look-zone').addEventListener('touchend', () => lastX = null);
+
+function loop() {
+    let spd = 0.04 * player.speed;
+    let nx = player.x + (Math.cos(player.dir)*moveF + Math.cos(player.dir+1.57)*moveS)*spd;
+    let ny = player.y + (Math.sin(player.dir)*moveF + Math.sin(player.dir+1.57)*moveS)*spd;
+    
+    if(map[Math.floor(ny)][Math.floor(nx)] === 0) {
+        player.x = nx; player.y = ny;
+        socket.emit('move', { x: player.x, y: player.y, dir: player.dir });
+    }
+
+    ctx.fillStyle = "#000"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    const rays = 100, fov = 1.1, zBuf = [];
+
+    // วาดฉาก 3D
+    for(let i=0; i<rays; i++) {
+        let ang = (player.dir - fov/2) + (i/rays)*fov;
+        let d = 0, cell = 0;
+        while(d < 10) {
+            d += 0.05;
+            let tx = Math.floor(player.x + Math.cos(ang)*d), ty = Math.floor(player.y + Math.sin(ang)*d);
+            if(map[ty][tx] !== 0) { cell = map[ty][tx]; break; }
+        }
+        zBuf[i] = d;
+        let h = canvas.height / d;
+        let lum = Math.max(0, 150 - (d*20));
+        ctx.fillStyle = cell === 1 ? `rgb(${lum/2},${lum/4},${lum/4})` : "#f00";
+        ctx.fillRect(i*(canvas.width/rays), (canvas.height-h)/2, (canvas.width/rays)+1, h);
+    }
+
+    // วาดเพื่อนออนไลน์ (เงาสีฟ้า)
+    for(let id in others) {
+        let p = others[id];
+        let sDir = Math.atan2(p.y-player.y, p.x-player.x) - player.dir;
+        while(sDir < -Math.PI) sDir += Math.PI*2; while(sDir > Math.PI) sDir -= Math.PI*2;
+        if(Math.abs(sDir) < fov/1.5) {
+            let sx = (0.5 * (sDir/(fov/2)) + 0.5) * canvas.width;
+            let sd = Math.sqrt((player.x-p.x)**2 + (player.y-p.y)**2);
+            let ss = canvas.height / sd;
+            if(sd < zBuf[Math.floor(sx/(canvas.width/rays))]) {
+                ctx.fillStyle = "rgba(0,180,255,0.8)";
+                ctx.fillRect(sx-ss/4, (canvas.height-ss)/2, ss/2, ss);
+            }
+        }
+    }
+    requestAnimationFrame(loop);
+}
+
+window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
+canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+loop();
+</script>
+</body>
+  </html>
+  
